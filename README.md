@@ -2,6 +2,8 @@
 
 A modern, hardened SSLCommerz payment gateway integration for WHMCS — supports the redesigned `pay.sslcommerz.com` hosted checkout, embedded popup mode, full IPN with hash verification, refunds, and a polished branded loader UI.
 
+![SSLCommerz WHMCS preview](docs/preview.png)
+
 ---
 
 ## Features
