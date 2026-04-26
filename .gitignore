@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# Logs / backups
+*.log
+*.bak
+
+# WHMCS template cache (if anyone ever runs from inside a real WHMCS install)
+templates_c/

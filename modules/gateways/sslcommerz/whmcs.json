@@ -1,0 +1,30 @@
+{
+  "schema": "1.0",
+  "type": "whmcs-gateways",
+  "name": "sslcommerz",
+  "license": "proprietary",
+  "category": "payments",
+  "description": {
+    "name": "SSLCommerz",
+    "tagline": "Accept online payments securely with SSLCommerz.",
+    "long": "SSLCommerz is a leading payment gateway solution in Bangladesh that allows businesses to accept payments via debit and credit cards, as well as mobile financial services (MFS). It provides a robust, secure platform with seamless integration.\n\n[Click to learn more and signup](https:\/\/sslcommerz.com)",
+    "features": [
+      "Supports all major debit/credit cards and MFS",
+      "Easy integration process",
+      "High-security standards with fraud protection"
+    ]
+  },
+  "logo": {
+    "filename": "sslcommerz_logo.png"
+  },
+  "support": {
+    "homepage": "https:\/\/sslcommerz.com",
+    "docs_url": "https:\/\/docs.sslcommerz.com"
+  },
+  "authors": [
+    {
+      "name": "Extent Technologies Limited",
+      "homepage": "https:\/\/extentit.com"
+    }
+  ]
+}
