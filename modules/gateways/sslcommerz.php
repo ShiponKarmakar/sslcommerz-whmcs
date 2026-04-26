@@ -434,23 +434,37 @@ function sslcommerz_link($params)
                 }
                 #sslczCloseBtn {
                     position: fixed;
-                    top: 16px;
-                    right: 16px;
-                    width: 40px;
-                    height: 40px;
+                    top: 18px;
+                    right: 18px;
+                    width: 44px;
+                    height: 44px;
+                    padding: 0;
                     border-radius: 50%;
-                    border: 0;
-                    background: #fff;
-                    color: #222;
-                    font-size: 22px;
-                    line-height: 1;
+                    border: 1px solid rgba(255, 255, 255, 0.18);
+                    background: #ffffff;
+                    color: #475569;
                     cursor: pointer;
-                    box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+                    box-shadow:
+                        0 10px 30px rgba(15, 23, 42, 0.45),
+                        0 2px 6px rgba(15, 23, 42, 0.25),
+                        inset 0 0 0 1px rgba(255, 255, 255, 0.6);
                     z-index: 2147483647;
                     display: none;
                 }
-                body.sslcz-modal-open #sslczCloseBtn { display: flex; align-items: center; justify-content: center; }
-                #sslczCloseBtn:hover { background: #f4f4f4; }
+                body.sslcz-modal-open #sslczCloseBtn { display: inline-flex; align-items: center; justify-content: center; }
+                #sslczCloseBtn svg {
+                    width: 18px; height: 18px;
+                    stroke: currentColor; stroke-width: 2.4;
+                    stroke-linecap: round; stroke-linejoin: round;
+                }
+                #sslczCloseBtn:hover {
+                    background: #f8fafc;
+                    color: ' . SSLCOMMERZ_BRAND_PURPLE . ';
+                }
+                #sslczCloseBtn:focus-visible {
+                    outline: 2px solid ' . SSLCOMMERZ_BRAND_PURPLE . ';
+                    outline-offset: 3px;
+                }
                 body.sslcz-modal-open { overflow: hidden !important; }
                 ' . $loaderCss . '
                 @media (max-width: 768px) {
@@ -470,7 +484,11 @@ function sslcommerz_link($params)
                 token="" postdata=\'{"paynow":"true"}\'
                 order="' . $invoiceIdHtml . '"
                 endpoint="' . $endpoint . '">' . $buttonLabel . '</button>
-            <button type="button" id="sslczCloseBtn" aria-label="Close payment popup">&times;</button>
+            <button type="button" id="sslczCloseBtn" aria-label="Close payment popup">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M6 6L18 18M18 6L6 18"/>
+                </svg>
+            </button>
             <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
             <script>
                 (function (w, d) {
