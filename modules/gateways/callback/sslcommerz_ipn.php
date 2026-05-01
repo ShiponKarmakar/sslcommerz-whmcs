@@ -138,31 +138,40 @@ if (!$invoice) {
 }
 
 $order_amount = (float) $invoice->total;
-if (abs($order_amount - $vAmount) > 0.01) {
-    logTransaction($GATEWAY['name'], ['post' => $_POST, 'validated' => $validated, 'expected' => $order_amount], 'Unsuccessful - Amount Mismatch');
-    exit();
-}
 
 if ($vCurrency === '') {
     logTransaction($GATEWAY['name'], ['post' => $_POST, 'validated' => $validated], 'Unsuccessful - Missing Currency');
     exit();
 }
 
-// Currency cross-check: link handler stores expected currency in value_b.
-// Reject if the validator-reported currency doesn't match what we asked for.
+// SSLCommerz auto-converts when the invoice currency differs from the merchant
+// settlement currency (e.g. USD invoice paid via BDT card / Bangla QR). In that
+// case currency_amount comes back in the settlement currency, so a strict
+// amount-equality check would always fail. Detect via value_b (set by the link
+// handler to the invoice currency) and skip strict amount/currency match — we
+// still trust status=VALID, hash, risk_level and tran_id.
 $expectedCurrency = $validated['value_b'] ?? ($_POST['value_b'] ?? '');
-if ($expectedCurrency !== '' && strcasecmp($vCurrency, $expectedCurrency) !== 0) {
-    logTransaction($GATEWAY['name'], ['post' => $_POST, 'validated' => $validated, 'expected_currency' => $expectedCurrency], 'Unsuccessful - Currency Mismatch');
-    exit();
+$crossCurrency    = $expectedCurrency !== '' && strcasecmp($vCurrency, $expectedCurrency) !== 0;
+
+if (!$crossCurrency) {
+    if (abs($order_amount - $vAmount) > 0.01) {
+        logTransaction($GATEWAY['name'], ['post' => $_POST, 'validated' => $validated, 'expected' => $order_amount], 'Unsuccessful - Amount Mismatch');
+        exit();
+    }
 }
 
 $invoiceid = checkCbInvoiceID($invoiceid, $GATEWAY['name']);
 checkCbTransID($vBankTran !== '' ? $vBankTran : $tran_id);
 
+// For cross-currency payments record the invoice's own total (in invoice
+// currency) — the customer fully paid the invoice via SSLCommerz's FX
+// conversion at SSLCommerz's rate; we cannot reproduce that rate locally.
+$amountToCredit = $crossCurrency ? $order_amount : $vAmount;
+
 addInvoicePayment(
     $invoiceid,
     $vBankTran !== '' ? $vBankTran : $tran_id,
-    $vAmount,
+    $amountToCredit,
     0,
     $gatewaymodule
 );
