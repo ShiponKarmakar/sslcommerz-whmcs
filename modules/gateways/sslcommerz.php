@@ -133,8 +133,59 @@ function sslcommerz_build_url(array $p)
 }
 
 /**
+ * Shared cURL helper for SSLCommerz REST endpoints. Returns [json_array|null, error_string|null].
+ */
+function sslcommerz_http_get($url)
+{
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 15);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+    $resp = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_errno($ch) ? curl_error($ch) : null;
+    curl_close($ch);
+
+    if ($err || $code !== 200) {
+        return [null, $err ?: ('HTTP ' . $code)];
+    }
+    $data = json_decode($resp, true);
+    if (!is_array($data)) {
+        return [null, 'Invalid JSON: ' . $resp];
+    }
+    return [$data, null];
+}
+
+/**
+ * Look up the original SSLCommerz transaction by bank_tran_id so we can
+ * discover the settlement currency / store_amount / FX rate before refunding.
+ * SSLCommerz's merchantTransIDvalidationAPI accepts bank_tran_id-only as a
+ * query (no refund_amount → it returns transaction details, doesn't refund).
+ */
+function sslcommerz_lookup_transaction($storeId, $storePass, $bankTran, $isSandbox)
+{
+    $base = $isSandbox ? SSLCOMMERZ_REFUND_SANDBOX : SSLCOMMERZ_REFUND_LIVE;
+    $url  = $base . '?' . http_build_query([
+        'bank_tran_id' => $bankTran,
+        'store_id'     => $storeId,
+        'store_passwd' => $storePass,
+        'v'            => 1,
+        'format'       => 'json',
+    ]);
+    return sslcommerz_http_get($url);
+}
+
+/**
  * WHMCS refund handler. Called from Admin → Invoices → Refund.
- * Uses SSLCommerz's refund API directly via cURL (no Composer vendor needed).
+ *
+ * Cross-currency aware: when the original payment went through SSLCommerz's
+ * FX conversion (e.g. USD invoice paid in BDT via Bangla QR / card), WHMCS
+ * passes us $params['amount'] in invoice currency (USD). SSLCommerz's refund
+ * API expects refund_amount in the *settlement* currency (BDT). We look up
+ * the original transaction to get its FX rate, then convert.
  */
 function sslcommerz_refund($params)
 {
@@ -142,12 +193,58 @@ function sslcommerz_refund($params)
     $storePass = $params['password'];
     $isSandbox = ($params['testmode'] ?? '') === 'on';
     $bankTran  = $params['transid'];
-    $amount    = number_format((float) $params['amount'], 2, '.', '');
+    $invoiceCurrency = $params['currency'] ?? '';
 
-    $url = $isSandbox ? SSLCOMMERZ_REFUND_SANDBOX : SSLCOMMERZ_REFUND_LIVE;
-    $body = http_build_query([
+    if ($bankTran === '' || $storeId === '' || $storePass === '') {
+        return ['status' => 'error', 'rawdata' => 'Missing transaction id or store credentials.'];
+    }
+
+    // 1) Look up the original transaction to discover settlement currency + FX rate.
+    [$lookup, $lookupErr] = sslcommerz_lookup_transaction($storeId, $storePass, $bankTran, $isSandbox);
+    if ($lookupErr) {
+        return ['status' => 'error', 'rawdata' => 'Lookup failed: ' . $lookupErr];
+    }
+
+    // The lookup endpoint returns either an "element" array or top-level fields
+    // depending on SSLCommerz API version — normalise both shapes.
+    $tx = $lookup;
+    if (isset($lookup['element'][0]) && is_array($lookup['element'][0])) {
+        $tx = $lookup['element'][0];
+    }
+
+    $settlementCurrency = $tx['currency'] ?? '';                    // currency SSLCommerz settled in (e.g. BDT)
+    $invoiceCurrencyTx  = $tx['currency_type'] ?? '';               // currency we originally requested
+    $fxRate             = isset($tx['currency_rate']) ? (float) $tx['currency_rate'] : 0.0;
+    $storeAmount        = isset($tx['store_amount']) ? (float) $tx['store_amount'] : 0.0;
+
+    // 2) Compute refund_amount in settlement currency.
+    //   - Same-currency:  refund $params['amount'] as-is.
+    //   - Cross-currency: convert using the original transaction's FX rate so
+    //     a partial refund maps to the right BDT amount. Fall back to
+    //     store_amount for full refunds if rate is missing.
+    $requestedAmount = (float) $params['amount'];
+    $isCrossCurrency = $settlementCurrency !== '' && $invoiceCurrency !== ''
+        && strcasecmp($settlementCurrency, $invoiceCurrency) !== 0;
+
+    if ($isCrossCurrency) {
+        if ($fxRate > 0) {
+            $refundAmount = $requestedAmount * $fxRate;
+        } elseif ($storeAmount > 0) {
+            // Full-refund fallback when SSLCommerz didn't report a rate.
+            $refundAmount = $storeAmount;
+        } else {
+            return ['status' => 'error', 'rawdata' => 'Cannot determine settlement amount for cross-currency refund.', 'lookup' => $tx];
+        }
+    } else {
+        $refundAmount = $requestedAmount;
+    }
+
+    $refundAmountStr = number_format($refundAmount, 2, '.', '');
+
+    // 3) Issue the refund.
+    $url = ($isSandbox ? SSLCOMMERZ_REFUND_SANDBOX : SSLCOMMERZ_REFUND_LIVE) . '?' . http_build_query([
         'bank_tran_id'   => $bankTran,
-        'refund_amount'  => $amount,
+        'refund_amount'  => $refundAmountStr,
         'refund_remarks' => 'Refund from WHMCS for transaction ' . $bankTran,
         'store_id'       => $storeId,
         'store_passwd'   => $storePass,
@@ -155,24 +252,12 @@ function sslcommerz_refund($params)
         'format'         => 'json',
     ]);
 
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url . '?' . $body);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
-    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 15);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $err      = curl_errno($ch) ? curl_error($ch) : null;
-    curl_close($ch);
-
-    if ($err || $httpCode !== 200) {
-        return ['status' => 'error', 'rawdata' => $err ?: 'HTTP ' . $httpCode];
+    [$data, $err] = sslcommerz_http_get($url);
+    if ($err) {
+        return ['status' => 'error', 'rawdata' => $err];
     }
-    $data = json_decode($response, true);
-    if (!is_array($data) || ($data['APIConnect'] ?? '') !== 'DONE') {
-        return ['status' => 'error', 'rawdata' => $response];
+    if (($data['APIConnect'] ?? '') !== 'DONE') {
+        return ['status' => 'error', 'rawdata' => $data];
     }
     if (!in_array($data['status'] ?? '', ['success', 'initiated', 'processing'], true)) {
         return ['status' => 'error', 'rawdata' => $data];
@@ -180,7 +265,11 @@ function sslcommerz_refund($params)
 
     return [
         'status'  => 'success',
-        'rawdata' => $data,
+        'rawdata' => [
+            'refund'    => $data,
+            'requested' => ['amount' => $requestedAmount, 'currency' => $invoiceCurrency],
+            'settled'   => ['amount' => $refundAmountStr, 'currency' => $settlementCurrency, 'fx_rate' => $fxRate],
+        ],
         'transid' => $data['refund_ref_id'] ?? $bankTran,
         'fees'    => 0,
     ];
