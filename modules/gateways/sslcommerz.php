@@ -1,5 +1,7 @@
 <?php
 
+use WHMCS\Database\Capsule;
+
 /**
  * SSLCommerz payment gateway for WHMCS.
  *
@@ -160,32 +162,54 @@ function sslcommerz_http_get($url)
 }
 
 /**
- * Look up the original SSLCommerz transaction by bank_tran_id so we can
- * discover the settlement currency / store_amount / FX rate before refunding.
- * SSLCommerz's merchantTransIDvalidationAPI accepts bank_tran_id-only as a
- * query (no refund_amount → it returns transaction details, doesn't refund).
+ * Find the original FX rate SSLCommerz used for a given bank_tran_id by reading
+ * the saved IPN entry from tblgatewaylog. This avoids a second API call to
+ * SSLCommerz (which triggers FAILED_SAME_REQ_IN_SAME_MIN dedup).
+ *
+ * Returns ['rate' => float, 'currency' => string] or null if not found.
  */
-function sslcommerz_lookup_transaction($storeId, $storePass, $bankTran, $isSandbox)
+function sslcommerz_lookup_fx_from_log($bankTran)
 {
-    $base = $isSandbox ? SSLCOMMERZ_REFUND_SANDBOX : SSLCOMMERZ_REFUND_LIVE;
-    $url  = $base . '?' . http_build_query([
-        'bank_tran_id' => $bankTran,
-        'store_id'     => $storeId,
-        'store_passwd' => $storePass,
-        'v'            => 1,
-        'format'       => 'json',
-    ]);
-    return sslcommerz_http_get($url);
+    if ($bankTran === '') {
+        return null;
+    }
+    try {
+        $row = Capsule::table('tblgatewaylog')
+            ->where('gateway', 'SSLCommerz')
+            ->where('result', 'Successful')
+            ->where('data', 'like', '%' . $bankTran . '%')
+            ->orderBy('id', 'desc')
+            ->first();
+        if (!$row || empty($row->data)) {
+            return null;
+        }
+        // tblgatewaylog.data is a print_r-style dump; pull currency_rate + currency.
+        $rate = null;
+        $currency = null;
+        if (preg_match('/currency_rate\s*=>\s*([0-9.]+)/', $row->data, $m)) {
+            $rate = (float) $m[1];
+        }
+        if (preg_match('/\[currency\]\s*=>\s*([A-Z]{3})/i', $row->data, $m)
+            || preg_match('/\bcurrency\s*=>\s*([A-Z]{3})/i', $row->data, $m)) {
+            $currency = strtoupper($m[1]);
+        }
+        if ($rate === null && $currency === null) {
+            return null;
+        }
+        return ['rate' => $rate ?? 1.0, 'currency' => $currency ?? ''];
+    } catch (\Throwable $e) {
+        return null;
+    }
 }
 
 /**
  * WHMCS refund handler. Called from Admin → Invoices → Refund.
  *
- * Cross-currency aware: when the original payment went through SSLCommerz's
- * FX conversion (e.g. USD invoice paid in BDT via Bangla QR / card), WHMCS
- * passes us $params['amount'] in invoice currency (USD). SSLCommerz's refund
- * API expects refund_amount in the *settlement* currency (BDT). We look up
- * the original transaction to get its FX rate, then convert.
+ * Cross-currency aware: SSLCommerz Bangladesh settles in BDT. When the invoice
+ * is in another currency (e.g. USD), WHMCS passes $params['amount'] in invoice
+ * currency but SSLCommerz's refund API expects refund_amount in BDT. We read
+ * the original FX rate from our own gateway log (saved at IPN time) — avoids
+ * a separate SSLCommerz API call which triggers FAILED_SAME_REQ_IN_SAME_MIN.
  */
 function sslcommerz_refund($params)
 {
@@ -193,55 +217,35 @@ function sslcommerz_refund($params)
     $storePass = $params['password'];
     $isSandbox = ($params['testmode'] ?? '') === 'on';
     $bankTran  = $params['transid'];
-    $invoiceCurrency = $params['currency'] ?? '';
+    $invoiceCurrency = strtoupper($params['currency'] ?? '');
+    $requestedAmount = (float) $params['amount'];
 
     if ($bankTran === '' || $storeId === '' || $storePass === '') {
         return ['status' => 'error', 'rawdata' => 'Missing transaction id or store credentials.'];
     }
 
-    // 1) Look up the original transaction to discover settlement currency + FX rate.
-    [$lookup, $lookupErr] = sslcommerz_lookup_transaction($storeId, $storePass, $bankTran, $isSandbox);
-    if ($lookupErr) {
-        return ['status' => 'error', 'rawdata' => 'Lookup failed: ' . $lookupErr];
-    }
+    // SSLCommerz Bangladesh settles in BDT. Convert only if invoice ≠ BDT.
+    $refundAmount = $requestedAmount;
+    $fxRate       = 1.0;
+    $needsConversion = $invoiceCurrency !== '' && $invoiceCurrency !== 'BDT';
 
-    // The lookup endpoint returns either an "element" array or top-level fields
-    // depending on SSLCommerz API version — normalise both shapes.
-    $tx = $lookup;
-    if (isset($lookup['element'][0]) && is_array($lookup['element'][0])) {
-        $tx = $lookup['element'][0];
-    }
-
-    $settlementCurrency = $tx['currency'] ?? '';                    // currency SSLCommerz settled in (e.g. BDT)
-    $invoiceCurrencyTx  = $tx['currency_type'] ?? '';               // currency we originally requested
-    $fxRate             = isset($tx['currency_rate']) ? (float) $tx['currency_rate'] : 0.0;
-    $storeAmount        = isset($tx['store_amount']) ? (float) $tx['store_amount'] : 0.0;
-
-    // 2) Compute refund_amount in settlement currency.
-    //   - Same-currency:  refund $params['amount'] as-is.
-    //   - Cross-currency: convert using the original transaction's FX rate so
-    //     a partial refund maps to the right BDT amount. Fall back to
-    //     store_amount for full refunds if rate is missing.
-    $requestedAmount = (float) $params['amount'];
-    $isCrossCurrency = $settlementCurrency !== '' && $invoiceCurrency !== ''
-        && strcasecmp($settlementCurrency, $invoiceCurrency) !== 0;
-
-    if ($isCrossCurrency) {
-        if ($fxRate > 0) {
+    if ($needsConversion) {
+        $fx = sslcommerz_lookup_fx_from_log($bankTran);
+        if ($fx && $fx['rate'] > 0) {
+            $fxRate       = $fx['rate'];
             $refundAmount = $requestedAmount * $fxRate;
-        } elseif ($storeAmount > 0) {
-            // Full-refund fallback when SSLCommerz didn't report a rate.
-            $refundAmount = $storeAmount;
         } else {
-            return ['status' => 'error', 'rawdata' => 'Cannot determine settlement amount for cross-currency refund.', 'lookup' => $tx];
+            return [
+                'status'  => 'error',
+                'rawdata' => 'Cannot find original FX rate in gateway log for transaction '
+                    . $bankTran . '. Manual refund required via SSLCommerz dashboard.',
+            ];
         }
-    } else {
-        $refundAmount = $requestedAmount;
     }
 
     $refundAmountStr = number_format($refundAmount, 2, '.', '');
 
-    // 3) Issue the refund.
+    // Issue refund — single API call to avoid SSLCommerz dedup window.
     $url = ($isSandbox ? SSLCOMMERZ_REFUND_SANDBOX : SSLCOMMERZ_REFUND_LIVE) . '?' . http_build_query([
         'bank_tran_id'   => $bankTran,
         'refund_amount'  => $refundAmountStr,
@@ -257,7 +261,9 @@ function sslcommerz_refund($params)
         return ['status' => 'error', 'rawdata' => $err];
     }
     if (($data['APIConnect'] ?? '') !== 'DONE') {
-        return ['status' => 'error', 'rawdata' => $data];
+        // Surface SSLCommerz's own error message when present (e.g. FAILED_SAME_REQ_IN_SAME_MIN).
+        $msg = $data['APIConnect'] ?? 'Unknown API error';
+        return ['status' => 'error', 'rawdata' => ['error' => $msg, 'response' => $data]];
     }
     if (!in_array($data['status'] ?? '', ['success', 'initiated', 'processing'], true)) {
         return ['status' => 'error', 'rawdata' => $data];
@@ -267,8 +273,8 @@ function sslcommerz_refund($params)
         'status'  => 'success',
         'rawdata' => [
             'refund'    => $data,
-            'requested' => ['amount' => $requestedAmount, 'currency' => $invoiceCurrency],
-            'settled'   => ['amount' => $refundAmountStr, 'currency' => $settlementCurrency, 'fx_rate' => $fxRate],
+            'requested' => ['amount' => $requestedAmount, 'currency' => $invoiceCurrency ?: 'BDT'],
+            'settled'   => ['amount' => $refundAmountStr, 'currency' => 'BDT', 'fx_rate' => $fxRate],
         ],
         'transid' => $data['refund_ref_id'] ?? $bankTran,
         'fees'    => 0,
