@@ -321,6 +321,25 @@ This is a community-maintained integration. For issues, open a GitHub issue with
 
 ---
 
+## Sponsors
+
+This module is proudly sponsored by:
+
+<p align="left">
+  <a href="https://univahost.com" target="_blank" rel="noopener">
+    <img src="https://univahost.com/assets/images/logo.svg" alt="UnivaHost" height="64">
+  </a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://zendforce.com" target="_blank" rel="noopener">
+    <img src="https://staging.zendforce.com/wp-content/uploads/2026/02/Logo-scaled.png" alt="ZendForce LLC" height="64">
+  </a>
+</p>
+
+- **[UnivaHost](https://univahost.com)** — Web hosting & domain solutions in Bangladesh.
+- **[ZendForce LLC](https://zendforce.com)** — Software & technology services.
+
+---
+
 ## Author
 
 Built and maintained by **[Shipon Karmakar](https://shiponkarmakar.com)**.
