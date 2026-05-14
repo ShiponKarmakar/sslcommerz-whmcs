@@ -193,6 +193,18 @@ SSLCommerz dedupes identical refund requests within a 1-minute window (`FAILED_S
 
 SSLCommerz Bangladesh settles in BDT. If your invoice is in another currency (e.g. USD), the module reads the original FX rate from the saved IPN entry in `tblgatewaylog` and converts before refunding. This works automatically for any payment processed by the module's IPN handler.
 
+### Add Funds invoice refunds (auto-credit reversal)
+
+WHMCS treats "Add Funds" invoices specially — when a customer pays one, the amount is added to their **account credit balance**. By default, WHMCS does **not** reverse this credit when the invoice is refunded, so the customer would otherwise keep both the refunded cash and the credit balance (double payout).
+
+This module detects Add Funds invoices and automatically removes the corresponding credit from the client's account after a successful gateway refund. The reversal is:
+
+- **Bounded by the current balance** — never pushes the client into negative credit (e.g. if they've already spent some of it).
+- **Logged in `tblcredit`** as `Auto-reverse of Add Funds Invoice #X (SSLCommerz gateway refund)` for audit.
+- **Reported back in the gateway log** under `rawdata.credit_reversal` with the previous/new balance and amount removed.
+
+For regular service invoices (hosting, domain, etc.) no credit reversal happens because no credit was added in the first place.
+
 ---
 
 ## Failure reason codes

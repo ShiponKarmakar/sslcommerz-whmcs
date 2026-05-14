@@ -203,6 +203,74 @@ function sslcommerz_lookup_fx_from_log($bankTran)
 }
 
 /**
+ * After a successful gateway refund, reverse the credit that an "Add Funds"
+ * invoice originally added to the client's account balance.
+ *
+ * WHMCS does NOT auto-remove credit when an Add Funds invoice is refunded —
+ * the customer would otherwise keep both the refunded cash AND the credit
+ * (double payout). We detect the AddFunds invoice item type and decrement
+ * tblclients.credit + insert a tblcredit log row. Bounded by current balance
+ * so we never push a client into negative credit.
+ *
+ * Returns an audit array describing what was done (or why nothing was done).
+ */
+function sslcommerz_reverse_addfunds_credit($invoiceId, $amount)
+{
+    $invoiceId = (int) $invoiceId;
+    $amount    = (float) $amount;
+    if ($invoiceId <= 0 || $amount <= 0) {
+        return ['done' => false, 'reason' => 'Invalid invoice id or amount.'];
+    }
+    try {
+        $isAddFunds = Capsule::table('tblinvoiceitems')
+            ->where('invoiceid', $invoiceId)
+            ->where('type', 'AddFunds')
+            ->exists();
+        if (!$isAddFunds) {
+            return ['done' => false, 'reason' => 'Not an Add Funds invoice.'];
+        }
+        $invoice = Capsule::table('tblinvoices')->where('id', $invoiceId)->first();
+        if (!$invoice || empty($invoice->userid)) {
+            return ['done' => false, 'reason' => 'Invoice or client not found.'];
+        }
+        $clientId = (int) $invoice->userid;
+        $client   = Capsule::table('tblclients')->where('id', $clientId)->first();
+        if (!$client) {
+            return ['done' => false, 'reason' => 'Client not found.'];
+        }
+        $currentCredit  = (float) ($client->credit ?? 0);
+        $amountToRemove = min($amount, $currentCredit);
+        if ($amountToRemove <= 0) {
+            return [
+                'done'   => false,
+                'reason' => 'Client has no credit available to reverse (current balance: ' . $currentCredit . ').',
+                'client_id'      => $clientId,
+                'current_credit' => $currentCredit,
+            ];
+        }
+        Capsule::table('tblclients')->where('id', $clientId)->update([
+            'credit' => $currentCredit - $amountToRemove,
+        ]);
+        Capsule::table('tblcredit')->insert([
+            'clientid'    => $clientId,
+            'date'        => date('Y-m-d'),
+            'description' => 'Auto-reverse of Add Funds Invoice #' . $invoiceId . ' (SSLCommerz gateway refund)',
+            'amount'      => -$amountToRemove,
+            'relid'       => $invoiceId,
+        ]);
+        return [
+            'done'             => true,
+            'client_id'        => $clientId,
+            'amount_removed'   => $amountToRemove,
+            'previous_balance' => $currentCredit,
+            'new_balance'      => $currentCredit - $amountToRemove,
+        ];
+    } catch (\Throwable $e) {
+        return ['done' => false, 'reason' => 'Exception: ' . $e->getMessage()];
+    }
+}
+
+/**
  * WHMCS refund handler. Called from Admin → Invoices → Refund.
  *
  * Cross-currency aware: SSLCommerz Bangladesh settles in BDT. When the invoice
@@ -210,6 +278,10 @@ function sslcommerz_lookup_fx_from_log($bankTran)
  * currency but SSLCommerz's refund API expects refund_amount in BDT. We read
  * the original FX rate from our own gateway log (saved at IPN time) — avoids
  * a separate SSLCommerz API call which triggers FAILED_SAME_REQ_IN_SAME_MIN.
+ *
+ * Add Funds aware: after a successful gateway refund, if the underlying
+ * invoice was an Add Funds invoice we auto-reverse the corresponding credit
+ * on the client's account balance.
  */
 function sslcommerz_refund($params)
 {
@@ -269,12 +341,17 @@ function sslcommerz_refund($params)
         return ['status' => 'error', 'rawdata' => $data];
     }
 
+    // Auto-reverse Add Funds credit so the client doesn't keep both cash + credit.
+    $invoiceId      = (int) ($params['invoiceid'] ?? 0);
+    $creditReversal = sslcommerz_reverse_addfunds_credit($invoiceId, $requestedAmount);
+
     return [
         'status'  => 'success',
         'rawdata' => [
-            'refund'    => $data,
-            'requested' => ['amount' => $requestedAmount, 'currency' => $invoiceCurrency ?: 'BDT'],
-            'settled'   => ['amount' => $refundAmountStr, 'currency' => 'BDT', 'fx_rate' => $fxRate],
+            'refund'           => $data,
+            'requested'        => ['amount' => $requestedAmount, 'currency' => $invoiceCurrency ?: 'BDT'],
+            'settled'          => ['amount' => $refundAmountStr, 'currency' => 'BDT', 'fx_rate' => $fxRate],
+            'credit_reversal'  => $creditReversal,
         ],
         'transid' => $data['refund_ref_id'] ?? $bankTran,
         'fees'    => 0,
