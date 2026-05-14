@@ -325,18 +325,26 @@ This is a community-maintained integration. For issues, open a GitHub issue with
 
 This module is proudly sponsored by:
 
-<p align="left">
-  <a href="https://univahost.com" target="_blank" rel="noopener">
-    <img src="https://univahost.com/assets/images/logo.svg" alt="UnivaHost" height="64">
-  </a>
-  &nbsp;&nbsp;&nbsp;&nbsp;
-  <a href="https://zendforce.com" target="_blank" rel="noopener">
-    <img src="https://staging.zendforce.com/wp-content/uploads/2026/02/Logo-scaled.png" alt="ZendForce LLC" height="64">
-  </a>
-</p>
-
-- **[UnivaHost](https://univahost.com)** — Web hosting & domain solutions in Bangladesh.
-- **[ZendForce LLC](https://zendforce.com)** — Software & technology services.
+<table width="100%">
+  <tr>
+    <td align="center" valign="middle" width="50%">
+      <a href="https://univahost.com" target="_blank" rel="noopener">
+        <img src="https://univahost.com/assets/images/logo.svg" alt="UnivaHost" height="48">
+      </a>
+      <br><br>
+      <b><a href="https://univahost.com">UnivaHost</a></b><br>
+      <sub>Web hosting & domain solutions in Bangladesh</sub>
+    </td>
+    <td align="center" valign="middle" width="50%">
+      <a href="https://zendforce.com" target="_blank" rel="noopener">
+        <img src="https://staging.zendforce.com/wp-content/uploads/2026/02/Logo-scaled.png" alt="ZendForce LLC" height="36">
+      </a>
+      <br><br>
+      <b><a href="https://zendforce.com">ZendForce LLC</a></b><br>
+      <sub>Software & technology services</sub>
+    </td>
+  </tr>
+</table>
 
 ---
 
