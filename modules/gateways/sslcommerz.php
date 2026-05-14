@@ -5,6 +5,8 @@ use WHMCS\Database\Capsule;
 /**
  * SSLCommerz payment gateway for WHMCS.
  *
+ * Author: Shipon Karmakar
+ *
  * Supports two checkout flows:
  *  - Standard redirect: user is sent to pay.sslcommerz.com (the new hosted UI).
  *  - Easy Checkout (popup): SSLCommerz's embed.min.js renders an iframe popup

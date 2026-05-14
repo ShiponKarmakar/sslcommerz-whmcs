@@ -318,3 +318,9 @@ This is a community-maintained integration. For issues, open a GitHub issue with
 - PHP version
 - The exact log line from **Admin → Utilities → Logs → Gateway Log** for the failing transaction
 - Screenshot of the gateway settings (with credentials redacted)
+
+---
+
+## Author
+
+Built and maintained by **Shipon Karmakar**.
