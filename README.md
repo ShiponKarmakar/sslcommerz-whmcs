@@ -150,6 +150,49 @@ Returns one of:
 
 Full SSLCommerz response is stored as raw data in the WHMCS Gateway Log for audit.
 
+### ⚠️ Important: Server IP must be whitelisted
+
+SSLCommerz restricts the Refund API (and other validation endpoints) by IP. Your WHMCS server's outbound IP **must be whitelisted on your SSLCommerz merchant account** before refunds will work — otherwise every refund attempt returns:
+
+```
+APIConnect: REQUEST_FROM_INVALID_SOURCE_<your.server.ip>
+```
+
+**How to whitelist your IP:**
+
+1. Find your WHMCS server's outbound IP. From the server, run:
+   ```bash
+   curl -s https://ifconfig.me
+   ```
+2. Log into the [SSLCommerz Merchant Panel](https://sellercenter.sslcommerz.com/) and look for **API Settings → IP Whitelisting** (menu name may vary).
+3. If you can't find the option, email `integration@sslcommerz.com` with:
+   - Your Store ID
+   - The IP to whitelist
+   - Request access to both the Refund API and the Transaction Validation API endpoints
+4. Wait for SSLCommerz to confirm, then allow a minute or two for propagation before retrying.
+
+**Sample email template:**
+
+> **Subject:** Whitelist server IP for Refund API — Store: `<your-store-id>`
+>
+> Dear SSLCommerz Team,
+>
+> Our Refund API calls are failing with:
+> ```
+> APIConnect: REQUEST_FROM_INVALID_SOURCE_<your.server.ip>
+> ```
+> Please whitelist our server IP `<your.server.ip>` for store **`<your-store-id>`** on the Refund and Validation API endpoints. Payment & IPN are working — only refund calls are blocked.
+>
+> Thank you.
+
+### Refund cooldown
+
+SSLCommerz dedupes identical refund requests within a 1-minute window (`FAILED_SAME_REQ_IN_SAME_MIN`). If a refund attempt fails for any reason, **wait 60+ seconds before retrying**.
+
+### Cross-currency refunds
+
+SSLCommerz Bangladesh settles in BDT. If your invoice is in another currency (e.g. USD), the module reads the original FX rate from the saved IPN entry in `tblgatewaylog` and converts before refunding. This works automatically for any payment processed by the module's IPN handler.
+
 ---
 
 ## Failure reason codes
@@ -191,6 +234,12 @@ When a payment fails, the user is redirected to `viewinvoice.php?paymentfailed=t
 
 ### Popup looks broken on mobile
 - The mobile auto-fallback should redirect instead of opening the popup. If you're seeing the popup on mobile, hard-refresh (Cmd+Shift+R) to clear cached JS.
+
+### Refund fails with `REQUEST_FROM_INVALID_SOURCE_<ip>`
+- SSLCommerz hasn't whitelisted your server IP for the Refund API. See the **[Refunds → Server IP must be whitelisted](#️-important-server-ip-must-be-whitelisted)** section above for the fix.
+
+### Refund fails with `FAILED_SAME_REQ_IN_SAME_MIN`
+- SSLCommerz rejected the call as a duplicate of one made in the last minute. Wait 60+ seconds and retry.
 
 ### OPcache warning in WHMCS health check
 - WHMCS recommends disabling OPcache. Edit `php.ini` (or your CLI php.ini for FPM) and set `opcache.enable=0`, then restart PHP-FPM.
