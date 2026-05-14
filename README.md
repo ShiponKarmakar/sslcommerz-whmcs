@@ -323,4 +323,4 @@ This is a community-maintained integration. For issues, open a GitHub issue with
 
 ## Author
 
-Built and maintained by **Shipon Karmakar**.
+Built and maintained by **[Shipon Karmakar](https://shiponkarmakar.com)**.
