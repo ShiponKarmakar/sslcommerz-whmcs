@@ -36,24 +36,56 @@ if ($tran_id === '' || $val_id === '' || $post_status !== 'VALID') {
     exit();
 }
 
-// 1) Verify IPN authenticity via SSLCommerz hash (verify_sign + verify_key)
-if (!empty($_POST['verify_sign']) && !empty($_POST['verify_key'])) {
-    $pre_define_key = explode(',', $_POST['verify_key']);
-    $new_data = [];
-    foreach ($pre_define_key as $key) {
-        if (isset($_POST[$key])) {
-            $new_data[$key] = $_POST[$key];
-        }
-    }
-    $new_data['store_passwd'] = md5($store_passwd);
-    ksort($new_data);
-    $hash_string = urldecode(http_build_query($new_data));
-    if (md5($hash_string) !== $_POST['verify_sign']) {
-        logTransaction($GATEWAY['name'], $_POST, 'Unsuccessful - Hash Mismatch');
-        exit();
-    }
-} else {
+// 1) Verify IPN authenticity via SSLCommerz hash.
+//    SSLCommerz sends verify_sign (MD5) and/or verify_sign_sha2 (SHA-256).
+//    Newer payment methods (Bangla QR, Bank Payment, etc.) may send only the
+//    SHA-256 variant, so we prefer SHA-256 and fall back to MD5 for older flows.
+$verifyKey       = $_POST['verify_key'] ?? '';
+$verifySignSha2  = $_POST['verify_sign_sha2'] ?? '';
+$verifySignMd5   = $_POST['verify_sign'] ?? '';
+
+if ($verifyKey === '' || ($verifySignSha2 === '' && $verifySignMd5 === '')) {
     logTransaction($GATEWAY['name'], $_POST, 'Unsuccessful - Missing verify_sign');
+    exit();
+}
+
+$preDefinedKeys = explode(',', $verifyKey);
+$baseData = [];
+foreach ($preDefinedKeys as $key) {
+    if (isset($_POST[$key])) {
+        $baseData[$key] = $_POST[$key];
+    }
+}
+
+$hashOk = false;
+$hashAlg = null;
+
+// Prefer SHA-256 (modern, secure)
+if ($verifySignSha2 !== '') {
+    $sha2Data = $baseData;
+    $sha2Data['store_passwd'] = hash('sha256', $store_passwd);
+    ksort($sha2Data);
+    $hashString = urldecode(http_build_query($sha2Data));
+    if (hash('sha256', $hashString) === $verifySignSha2) {
+        $hashOk = true;
+        $hashAlg = 'sha256';
+    }
+}
+
+// Fall back to MD5 (legacy, for compatibility with older SSLCommerz flows)
+if (!$hashOk && $verifySignMd5 !== '') {
+    $md5Data = $baseData;
+    $md5Data['store_passwd'] = md5($store_passwd);
+    ksort($md5Data);
+    $hashString = urldecode(http_build_query($md5Data));
+    if (md5($hashString) === $verifySignMd5) {
+        $hashOk = true;
+        $hashAlg = 'md5';
+    }
+}
+
+if (!$hashOk) {
+    logTransaction($GATEWAY['name'], $_POST, 'Unsuccessful - Hash Mismatch');
     exit();
 }
 
@@ -176,5 +208,10 @@ addInvoicePayment(
     $gatewaymodule
 );
 
-logTransaction($GATEWAY['name'], ['post' => $_POST, 'validated' => $validated], 'Successful');
+logTransaction($GATEWAY['name'], [
+    'post'      => $_POST,
+    'validated' => $validated,
+    'hash_alg'  => $hashAlg,
+    'mode'      => $crossCurrency ? 'cross-currency' : 'same-currency',
+], 'Successful');
 exit();
